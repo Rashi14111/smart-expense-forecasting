@@ -1,0 +1,141 @@
+import pandas as pd
+import numpy as np
+import streamlit as st
+from datetime import datetime
+
+@st.cache_data
+def load_excel_data(file_path):
+    """Load and process Excel data from all sheets"""
+    try:
+        if hasattr(file_path, 'read'):
+            # Handle uploaded file
+            xls = pd.ExcelFile(file_path)
+        else:
+            # Handle file path
+            xls = pd.ExcelFile(file_path)
+            
+        data_dict = {}
+        
+        for sheet_name in xls.sheet_names:
+            df = pd.read_excel(xls, sheet_name=sheet_name)
+            
+            # Clean and standardize column names
+            df.columns = [col.strip().title() for col in df.columns]
+            
+            # Convert Date column
+            if 'Date' in df.columns:
+                df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+            
+            # Ensure Amount is numeric
+            if 'Amount' in df.columns:
+                df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce')
+            
+            # Remove rows with invalid dates or amounts
+            df = df.dropna(subset=['Date', 'Amount'])
+            
+            if not df.empty:
+                data_dict[sheet_name] = df
+                
+        return data_dict
+        
+    except Exception as e:
+        st.error(f"Error loading Excel file: {str(e)}")
+        return {}
+
+def preprocess_data(df):
+    """Preprocess data for monthly aggregation and analysis"""
+    try:
+        df = df.copy()
+        
+        # Create monthly aggregates
+        df['YearMonth'] = df['Date'].dt.to_period('M')
+        monthly_data = df.groupby('YearMonth').agg({
+            'Amount': ['sum', 'mean', 'count', 'std', 'min', 'max']
+        }).round(2)
+        
+        monthly_data.columns = [
+            'Total_Amount', 'Average_Amount', 'Transaction_Count', 
+            'Amount_Std', 'Min_Amount', 'Max_Amount'
+        ]
+        monthly_data = monthly_data.reset_index()
+        monthly_data['YearMonth'] = monthly_data['YearMonth'].dt.to_timestamp()
+        
+        # Add month number for trend analysis
+        monthly_data['Month_Num'] = range(1, len(monthly_data) + 1)
+        
+        # Calculate additional metrics
+        monthly_data['YoY_Growth'] = monthly_data['Total_Amount'].pct_change() * 100
+        monthly_data['MoM_Growth'] = monthly_data['Total_Amount'].pct_change(periods=1) * 100
+        
+        return monthly_data
+        
+    except Exception as e:
+        print(f"Error in preprocessing: {e}")
+        return pd.DataFrame()
+
+def calculate_comprehensive_metrics(monthly_df, df, category):
+    """Calculate comprehensive business metrics"""
+    if monthly_df.empty:
+        return {}
+    
+    total_spent = monthly_df['Total_Amount'].sum()
+    avg_monthly = monthly_df['Total_Amount'].mean()
+    highest_month_idx = monthly_df['Total_Amount'].idxmax()
+    lowest_month_idx = monthly_df['Total_Amount'].idxmin()
+    
+    # Growth rate calculation
+    if len(monthly_df) > 1:
+        growth_rate = ((monthly_df['Total_Amount'].iloc[-1] - monthly_df['Total_Amount'].iloc[0]) / 
+                      monthly_df['Total_Amount'].iloc[0]) * 100
+    else:
+        growth_rate = 0
+    
+    # Variance calculation (coefficient of variation)
+    variance = monthly_df['Total_Amount'].std() / monthly_df['Total_Amount'].mean() if monthly_df['Total_Amount'].mean() > 0 else 0
+    
+    # Efficiency score (0-10)
+    efficiency_score = max(0, min(10, 10 - (variance * 5) - (abs(growth_rate) / 10)))
+    
+    # Trend analysis
+    if growth_rate > 5:
+        trend_icon = "📈"
+        trend_description = "Strong growth trend observed"
+    elif growth_rate > 0:
+        trend_icon = "↗️"
+        trend_description = "Moderate growth trend"
+    elif growth_rate > -5:
+        trend_icon = "➡️"
+        trend_description = "Stable spending pattern"
+    else:
+        trend_icon = "📉"
+        trend_description = "Declining trend detected"
+    
+    # Efficiency comment
+    if efficiency_score >= 8:
+        efficiency_comment = "Excellent spending control"
+    elif efficiency_score >= 6:
+        efficiency_comment = "Good expense management"
+    elif efficiency_score >= 4:
+        efficiency_comment = "Moderate efficiency, room for improvement"
+    else:
+        efficiency_comment = "Needs optimization attention"
+    
+    return {
+        'total_spent': total_spent,
+        'avg_monthly': avg_monthly,
+        'highest_month_amount': monthly_df.loc[highest_month_idx, 'Total_Amount'],
+        'highest_month_name': monthly_df.loc[highest_month_idx, 'YearMonth'].strftime('%B %Y'),
+        'highest_month_percentage': (monthly_df.loc[highest_month_idx, 'Total_Amount'] / total_spent * 100),
+        'lowest_month_amount': monthly_df.loc[lowest_month_idx, 'Total_Amount'],
+        'lowest_month_name': monthly_df.loc[lowest_month_idx, 'YearMonth'].strftime('%B %Y'),
+        'growth_rate': growth_rate,
+        'variance': variance,
+        'efficiency_score': round(efficiency_score, 1),
+        'trend_icon': trend_icon,
+        'trend_description': trend_description,
+        'efficiency_comment': efficiency_comment,
+        'transaction_count': len(df),
+        'period_start': monthly_df['YearMonth'].min(),
+        'period_end': monthly_df['YearMonth'].max(),
+        'analysis_period': len(monthly_df)
+    }
