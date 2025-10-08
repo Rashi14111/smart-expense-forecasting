@@ -10,3 +10,5 @@ openpyxl
 scikit-learn
 openpyxl
 xlrd
+
+reportlab
