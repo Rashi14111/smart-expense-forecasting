@@ -9,9 +9,9 @@ warnings.filterwarnings('ignore')
 from datetime import datetime, timedelta
 import io
 import base64
-from backend.data_loader import load_excel_data, preprocess_data, calculate_comprehensive_metrics
-from backend.forecast_model import forecast_expenses, calculate_seasonal_trends, advanced_ml_analysis
-from backend.pdf_generator import generate_comprehensive_pdf, generate_company_pdf_report
+# from backend.data_loader import load_excel_data, preprocess_data, calculate_comprehensive_metrics
+# from backend.forecast_model import forecast_expenses, calculate_seasonal_trends, advanced_ml_analysis
+# from backend.pdf_generator import generate_comprehensive_pdf, generate_company_pdf_report
 
 # ================= PAGE CONFIG =================
 st.set_page_config(
@@ -20,7 +20,451 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+# ================= BACKEND FUNCTIONS =================
 
+@st.cache_data
+def load_excel_data(file_path):
+    """Load and process Excel data from all sheets"""
+    try:
+        if hasattr(file_path, 'read'):
+            # Handle uploaded file
+            xls = pd.ExcelFile(file_path)
+        else:
+            # Handle file path
+            xls = pd.ExcelFile(file_path)
+            
+        data_dict = {}
+        
+        for sheet_name in xls.sheet_names:
+            df = pd.read_excel(xls, sheet_name=sheet_name)
+            
+            # Clean and standardize column names
+            df.columns = [col.strip().title() for col in df.columns]
+            
+            # Convert Date column
+            if 'Date' in df.columns:
+                df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+            
+            # Ensure Amount is numeric
+            if 'Amount' in df.columns:
+                df['Amount'] = pd.to_numeric(df['Amount'], errors='coerce')
+            
+            # Remove rows with invalid dates or amounts
+            df = df.dropna(subset=['Date', 'Amount'])
+            
+            if not df.empty:
+                data_dict[sheet_name] = df
+                
+        return data_dict
+        
+    except Exception as e:
+        st.error(f"Error loading Excel file: {str(e)}")
+        return {}
+
+def preprocess_data(df):
+    """Preprocess data for monthly aggregation and analysis"""
+    try:
+        df = df.copy()
+        
+        # Create monthly aggregates
+        df['YearMonth'] = df['Date'].dt.to_period('M')
+        monthly_data = df.groupby('YearMonth').agg({
+            'Amount': ['sum', 'mean', 'count', 'std', 'min', 'max']
+        }).round(2)
+        
+        monthly_data.columns = [
+            'Total_Amount', 'Average_Amount', 'Transaction_Count', 
+            'Amount_Std', 'Min_Amount', 'Max_Amount'
+        ]
+        monthly_data = monthly_data.reset_index()
+        monthly_data['YearMonth'] = monthly_data['YearMonth'].dt.to_timestamp()
+        
+        # Add month number for trend analysis
+        monthly_data['Month_Num'] = range(1, len(monthly_data) + 1)
+        
+        # Calculate additional metrics
+        monthly_data['YoY_Growth'] = monthly_data['Total_Amount'].pct_change() * 100
+        monthly_data['MoM_Growth'] = monthly_data['Total_Amount'].pct_change(periods=1) * 100
+        
+        return monthly_data
+        
+    except Exception as e:
+        print(f"Error in preprocessing: {e}")
+        return pd.DataFrame()
+
+def calculate_comprehensive_metrics(monthly_df, df, category):
+    """Calculate comprehensive business metrics"""
+    if monthly_df.empty:
+        return {}
+    
+    total_spent = monthly_df['Total_Amount'].sum()
+    avg_monthly = monthly_df['Total_Amount'].mean()
+    highest_month_idx = monthly_df['Total_Amount'].idxmax()
+    lowest_month_idx = monthly_df['Total_Amount'].idxmin()
+    
+    # Growth rate calculation
+    if len(monthly_df) > 1:
+        growth_rate = ((monthly_df['Total_Amount'].iloc[-1] - monthly_df['Total_Amount'].iloc[0]) / 
+                      monthly_df['Total_Amount'].iloc[0]) * 100
+    else:
+        growth_rate = 0
+    
+    # Variance calculation (coefficient of variation)
+    variance = monthly_df['Total_Amount'].std() / monthly_df['Total_Amount'].mean() if monthly_df['Total_Amount'].mean() > 0 else 0
+    
+    # Efficiency score (0-10)
+    efficiency_score = max(0, min(10, 10 - (variance * 5) - (abs(growth_rate) / 10)))
+    
+    # Trend analysis
+    if growth_rate > 5:
+        trend_icon = "📈"
+        trend_description = "Strong growth trend observed"
+    elif growth_rate > 0:
+        trend_icon = "↗️"
+        trend_description = "Moderate growth trend"
+    elif growth_rate > -5:
+        trend_icon = "➡️"
+        trend_description = "Stable spending pattern"
+    else:
+        trend_icon = "📉"
+        trend_description = "Declining trend detected"
+    
+    # Efficiency comment
+    if efficiency_score >= 8:
+        efficiency_comment = "Excellent spending control"
+    elif efficiency_score >= 6:
+        efficiency_comment = "Good expense management"
+    elif efficiency_score >= 4:
+        efficiency_comment = "Moderate efficiency, room for improvement"
+    else:
+        efficiency_comment = "Needs optimization attention"
+    
+    return {
+        'total_spent': total_spent,
+        'avg_monthly': avg_monthly,
+        'highest_month_amount': monthly_df.loc[highest_month_idx, 'Total_Amount'],
+        'highest_month_name': monthly_df.loc[highest_month_idx, 'YearMonth'].strftime('%B %Y'),
+        'highest_month_percentage': (monthly_df.loc[highest_month_idx, 'Total_Amount'] / total_spent * 100),
+        'lowest_month_amount': monthly_df.loc[lowest_month_idx, 'Total_Amount'],
+        'lowest_month_name': monthly_df.loc[lowest_month_idx, 'YearMonth'].strftime('%B %Y'),
+        'growth_rate': growth_rate,
+        'variance': variance,
+        'efficiency_score': round(efficiency_score, 1),
+        'trend_icon': trend_icon,
+        'trend_description': trend_description,
+        'efficiency_comment': efficiency_comment,
+        'transaction_count': len(df),
+        'period_start': monthly_df['YearMonth'].min(),
+        'period_end': monthly_df['YearMonth'].max(),
+        'analysis_period': len(monthly_df)
+    }
+
+def forecast_expenses(monthly_df, periods=6):
+    """Generate expense forecasts using multiple models"""
+    try:
+        if len(monthly_df) < 3:
+            return pd.DataFrame()
+            
+        # Prepare data for forecasting
+        X = np.array(range(len(monthly_df))).reshape(-1, 1)
+        y = monthly_df['Total_Amount'].values
+        
+        # Linear Regression
+        lr_model = LinearRegression()
+        lr_model.fit(X, y)
+        
+        # Random Forest for better pattern recognition
+        rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
+        rf_model.fit(X, y)
+        
+        # Generate future dates
+        last_date = monthly_df['YearMonth'].max()
+        future_dates = [last_date + pd.DateOffset(months=i+1) for i in range(periods)]
+        
+        # Generate forecasts
+        future_X = np.array(range(len(monthly_df), len(monthly_df) + periods)).reshape(-1, 1)
+        
+        # Ensemble forecast (average of both models)
+        lr_forecast = lr_model.predict(future_X)
+        rf_forecast = rf_model.predict(future_X)
+        ensemble_forecast = (lr_forecast + rf_forecast) / 2
+        
+        # Create forecast dataframe
+        forecast_df = pd.DataFrame({
+            'Date': future_dates,
+            'Forecast': ensemble_forecast,
+            'Linear_Forecast': lr_forecast,
+            'RF_Forecast': rf_forecast
+        })
+        
+        return forecast_df.round(2)
+        
+    except Exception as e:
+        print(f"Forecasting error: {e}")
+        return pd.DataFrame()
+
+def calculate_seasonal_trends(monthly_df):
+    """Calculate seasonal patterns in expense data"""
+    if len(monthly_df) < 6:
+        return "Insufficient data for seasonal analysis"
+    
+    try:
+        # Calculate monthly patterns
+        monthly_df['Month'] = monthly_df['YearMonth'].dt.month
+        monthly_patterns = monthly_df.groupby('Month')['Total_Amount'].mean()
+        
+        if len(monthly_patterns) >= 3:
+            peak_month = monthly_patterns.idxmax()
+            low_month = monthly_patterns.idxmin()
+            
+            months = ['January', 'February', 'March', 'April', 'May', 'June',
+                     'July', 'August', 'September', 'October', 'November', 'December']
+            
+            return f"Peak in {months[peak_month-1]}, Lowest in {months[low_month-1]}"
+        else:
+            return "Limited seasonal pattern detected"
+            
+    except Exception as e:
+        return "Seasonal analysis unavailable"
+
+def advanced_ml_analysis(monthly_df, df):
+    """Perform advanced ML analysis on expense data"""
+    insights = {}
+    
+    try:
+        # Pattern analysis
+        if len(monthly_df) >= 3:
+            volatility = monthly_df['Total_Amount'].std() / monthly_df['Total_Amount'].mean()
+            if volatility < 0.2:
+                insights['patterns'] = "✅ Stable spending patterns with low volatility. Excellent budget predictability."
+            elif volatility < 0.4:
+                insights['patterns'] = "📊 Moderate spending variability. Consider implementing monthly budget controls."
+            else:
+                insights['patterns'] = "⚠️ High spending volatility detected. Immediate budget optimization recommended."
+        
+        # Optimization insights
+        if 'Expense Head' in df.columns:
+            category_analysis = df.groupby('Expense Head')['Amount'].sum()
+            if len(category_analysis) > 0:
+                top_category = category_analysis.idxmax()
+                insights['optimization'] = f"🎯 Focus optimization efforts on '{top_category}' - your highest spending category."
+        
+        # Forecasting insights
+        if len(monthly_df) >= 4:
+            growth_trend = monthly_df['Total_Amount'].pct_change().mean() * 100
+            if growth_trend > 5:
+                insights['forecasting'] = f"📈 Strong upward trend ({growth_trend:.1f}% monthly growth). Plan for increasing budgets."
+            elif growth_trend > 0:
+                insights['forecasting'] = f"↗️ Moderate growth trend ({growth_trend:.1f}%). Maintain current planning approach."
+            else:
+                insights['forecasting'] = f"📉 Declining trend ({growth_trend:.1f}%). Opportunity for cost optimization."
+        
+        # Risk analysis
+        efficiency = 10 - (monthly_df['Total_Amount'].std() / monthly_df['Total_Amount'].mean() * 5)
+        if efficiency >= 8:
+            insights['risk'] = "🛡️ Low financial risk. Strong expense management practices."
+        elif efficiency >= 6:
+            insights['risk'] = "⚠️ Moderate risk. Implement additional monitoring controls."
+        else:
+            insights['risk'] = "🚨 High risk detected. Immediate strategic review required."
+            
+    except Exception as e:
+        insights = {
+            'patterns': 'Pattern analysis in progress...',
+            'optimization': 'Optimization insights being generated...',
+            'forecasting': 'Forecast intelligence loading...',
+            'risk': 'Risk assessment initializing...'
+        }
+    
+    return insights
+
+def generate_comprehensive_pdf(df, category, metrics, monthly_df, forecast_df):
+    """Generate a comprehensive PDF report"""
+    try:
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=letter)
+        styles = getSampleStyleSheet()
+        story = []
+        
+        # Title
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=24,
+            spaceAfter=30,
+            textColor=colors.HexColor('#2c3e50'),
+            alignment=1
+        )
+        title = Paragraph(f"EXPENSE INTELLIGENCE REPORT - {category.upper()}", title_style)
+        story.append(title)
+        story.append(Spacer(1, 20))
+        
+        # Executive Summary
+        summary_style = ParagraphStyle(
+            'Summary',
+            parent=styles['Normal'],
+            fontSize=12,
+            spaceAfter=12,
+            textColor=colors.HexColor('#34495e')
+        )
+        
+        summary_text = f"""
+        <b>Executive Summary</b><br/>
+        This report provides comprehensive analysis of {category} expenses covering {metrics['analysis_period']} months. 
+        Total expenditure: ₹{metrics['total_spent']:,.0f} with an average of ₹{metrics['avg_monthly']:,.0f} monthly.
+        Efficiency Score: {metrics['efficiency_score']}/10 - {metrics['efficiency_comment']}
+        """
+        story.append(Paragraph(summary_text, summary_style))
+        story.append(Spacer(1, 20))
+        
+        # Key Metrics Table
+        metrics_data = [
+            ['Key Metric', 'Value', 'Insight'],
+            ['Total Expenditure', f"₹{metrics['total_spent']:,.0f}", 'Overall spending'],
+            ['Monthly Average', f"₹{metrics['avg_monthly']:,.0f}", 'Budget baseline'],
+            ['Growth Rate', f"{metrics['growth_rate']:+.1f}%", metrics['trend_description']],
+            ['Efficiency Score', f"{metrics['efficiency_score']}/10", metrics['efficiency_comment']],
+            ['Peak Month', f"{metrics['highest_month_name']} (₹{metrics['highest_month_amount']:,.0f})", 'Highest spending'],
+            ['Lowest Month', f"{metrics['lowest_month_name']} (₹{metrics['lowest_month_amount']:,.0f})", 'Most efficient']
+        ]
+        
+        metrics_table = Table(metrics_data, colWidths=[2*inch, 2*inch, 2.5*inch])
+        metrics_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3498db')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 12),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#ecf0f1')),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        ]))
+        story.append(metrics_table)
+        story.append(Spacer(1, 20))
+        
+        # Forecast Summary
+        if not forecast_df.empty:
+            forecast_text = f"""
+            <b>Future Outlook</b><br/>
+            Next {len(forecast_df)} months forecast: Average ₹{forecast_df['Forecast'].mean():,.0f}/month. 
+            Total projected: ₹{forecast_df['Forecast'].sum():,.0f}
+            """
+            story.append(Paragraph(forecast_text, summary_style))
+            story.append(Spacer(1, 10))
+        
+        # Recommendations
+        rec_style = ParagraphStyle(
+            'Recommendations',
+            parent=styles['Normal'],
+            fontSize=11,
+            spaceAfter=6,
+            textColor=colors.HexColor('#27ae60'),
+            leftIndent=20
+        )
+        
+        story.append(Paragraph("<b>Strategic Recommendations:</b>", summary_style))
+        if metrics['efficiency_score'] < 7:
+            story.append(Paragraph("• Implement weekly budget reviews and variance analysis", rec_style))
+            story.append(Paragraph("• Set spending alerts for amounts exceeding monthly averages", rec_style))
+            story.append(Paragraph("• Optimize highest spending categories identified in the report", rec_style))
+        else:
+            story.append(Paragraph("• Maintain current excellent expense management practices", rec_style))
+            story.append(Paragraph("• Explore advanced optimization opportunities", rec_style))
+            story.append(Paragraph("• Share best practices across the organization", rec_style))
+        
+        doc.build(story)
+        buffer.seek(0)
+        return buffer
+        
+    except Exception as e:
+        st.error(f"PDF generation error: {str(e)}")
+        return io.BytesIO()
+
+def generate_company_pdf_report(data):
+    """Generate company-wide PDF report"""
+    try:
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=letter)
+        styles = getSampleStyleSheet()
+        story = []
+        
+        # Title
+        title_style = ParagraphStyle(
+            'CompanyTitle',
+            parent=styles['Heading1'],
+            fontSize=20,
+            spaceAfter=30,
+            textColor=colors.HexColor('#2c3e50'),
+            alignment=1
+        )
+        title = Paragraph("COMPANY EXPENSE INTELLIGENCE REPORT", title_style)
+        story.append(title)
+        story.append(Spacer(1, 20))
+        
+        # Process all categories
+        all_metrics = {}
+        total_enterprise = 0
+        
+        for category_name, df in data.items():
+            monthly_df = preprocess_data(df)
+            if not monthly_df.empty:
+                metrics = calculate_comprehensive_metrics(monthly_df, df, category_name)
+                all_metrics[category_name] = metrics
+                total_enterprise += metrics['total_spent']
+        
+        # Company Summary
+        summary_style = ParagraphStyle(
+            'CompanySummary',
+            parent=styles['Normal'],
+            fontSize=12,
+            spaceAfter=12,
+            textColor=colors.HexColor('#34495e')
+        )
+        
+        avg_efficiency = np.mean([m['efficiency_score'] for m in all_metrics.values()])
+        overall_growth = np.mean([m['growth_rate'] for m in all_metrics.values()])
+        
+        summary_text = f"""
+        <b>Enterprise Overview</b><br/>
+        Total Company Expenditure: ₹{total_enterprise:,.0f}<br/>
+        Average Efficiency Score: {avg_efficiency:.1f}/10<br/>
+        Overall Growth Trend: {overall_growth:+.1f}%<br/>
+        Categories Analyzed: {len(all_metrics)}
+        """
+        story.append(Paragraph(summary_text, summary_style))
+        story.append(Spacer(1, 20))
+        
+        # Category Performance Table
+        cat_data = [['Category', 'Total Spend', 'Monthly Avg', 'Efficiency', 'Growth']]
+        
+        for cat_name, metrics in all_metrics.items():
+            cat_data.append([
+                cat_name,
+                f"₹{metrics['total_spent']:,.0f}",
+                f"₹{metrics['avg_monthly']:,.0f}",
+                f"{metrics['efficiency_score']}/10",
+                f"{metrics['growth_rate']:+.1f}%"
+            ])
+        
+        cat_table = Table(cat_data, colWidths=[1.5*inch, 1.5*inch, 1.2*inch, 1.2*inch, 1.2*inch])
+        cat_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#e74c3c')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 11),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#f8f9fa')),
+            ('GRID', (0, 0), (-1, -1), 1, colors.grey)
+        ]))
+        story.append(cat_table)
+        
+        doc.build(story)
+        buffer.seek(0)
+        return buffer
+        
+    except Exception as e:
+        st.error(f"Company PDF error: {str(e)}")
+        return io.BytesIO()
 # ================= ATTRACTIVE GRADIENT CSS =================
 st.markdown("""
 <style>
@@ -1733,3 +2177,4 @@ def main():
 # Run the application
 if __name__ == "__main__":
     main()
+
