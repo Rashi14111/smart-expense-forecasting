@@ -11,7 +11,7 @@ import io
 import base64
 from backend.data_loader import load_excel_data, preprocess_data, calculate_comprehensive_metrics
 from backend.forecast_model import forecast_expenses, calculate_seasonal_trends, advanced_ml_analysis
-from backend.pdf_generator import generate_comprehensive_pdf
+from backend.pdf_generator import generate_comprehensive_pdf, generate_company_pdf_report
 
 # ================= PAGE CONFIG =================
 st.set_page_config(
@@ -1468,6 +1468,18 @@ def render_data_explorer(data, category):
         
         # Enhanced data display
         st.markdown("### 📊 FILTERED DATA ANALYSIS")
+        
+        # Show summary metrics
+        col_sum1, col_sum2, col_sum3, col_sum4 = st.columns(4)
+        with col_sum1:
+            st.metric("Total Records", len(filtered_df))
+        with col_sum2:
+            st.metric("Total Amount", f"₹{filtered_df['Amount'].sum():,.0f}")
+        with col_sum3:
+            st.metric("Average Amount", f"₹{filtered_df['Amount'].mean():,.0f}")
+        with col_sum4:
+            st.metric("Date Range", f"{filtered_df['Date'].min().strftime('%d/%m/%y')} - {filtered_df['Date'].max().strftime('%d/%m/%y')}")
+        
         st.dataframe(filtered_df, use_container_width=True, height=400)
         
         # Enhanced export options
@@ -1518,7 +1530,16 @@ def render_data_explorer(data, category):
             if st.button("📄 Generate PDF Report", use_container_width=True, key="pdf_generate"):
                 with st.spinner("🔄 Creating comprehensive PDF report..."):
                     try:
-                        pdf_buffer = generate_comprehensive_pdf(filtered_df, category)
+                        # Calculate metrics for PDF
+                        monthly_df = preprocess_data(filtered_df)
+                        metrics = None
+                        forecast_df = None
+                        
+                        if not monthly_df.empty:
+                            metrics = calculate_comprehensive_metrics(monthly_df, filtered_df, category)
+                            forecast_df = forecast_expenses(monthly_df, 6)
+                        
+                        pdf_buffer = generate_comprehensive_pdf(filtered_df, category, metrics, monthly_df, forecast_df)
                         st.success("✅ PDF report generated successfully!")
                         
                         st.download_button(
@@ -1531,7 +1552,95 @@ def render_data_explorer(data, category):
                         )
                     except Exception as e:
                         st.error(f"❌ Error generating PDF: {str(e)}")
+        
+        # Company-wide PDF option
+        st.markdown("---")
+        st.markdown("### 🏢 ENTERPRISE-LEVEL REPORTING")
+        
+        col_comp1, col_comp2 = st.columns(2)
+        
+        with col_comp1:
+            if st.button("📈 Generate Full Company Report", use_container_width=True, key="company_report"):
+                with st.spinner("🔄 Generating comprehensive company analysis..."):
+                    try:
+                        company_pdf_buffer = generate_company_pdf_report(data)
+                        st.success("✅ Company report generated successfully!")
+                        
+                        st.download_button(
+                            label="🏢 Download Full Company PDF",
+                            data=company_pdf_buffer.getvalue(),
+                            file_name="company_expense_intelligence_report.pdf",
+                            mime="application/pdf",
+                            use_container_width=True,
+                            key="company_pdf_download"
+                        )
+                    except Exception as e:
+                        st.error(f"❌ Error generating company report: {str(e)}")
+        
+        with col_comp2:
+            st.markdown("""
+            <div class='tooltip-box'>
+            <strong>📋 Company Report Includes:</strong><br>
+            • All department analysis<br>
+            • Comparative performance<br>
+            • Strategic recommendations<br>
+            • Risk assessment<br>
+            • Executive summary
+            </div>
+            """, unsafe_allow_html=True)
+        
+        # Quick Analysis Section
+        st.markdown("---")
+        st.markdown("### 📈 QUICK DATA INSIGHTS")
+        
+        if len(filtered_df) > 0:
+            col_insight1, col_insight2 = st.columns(2)
+            
+            with col_insight1:
+                # Top categories
+                if "Expense Head" in filtered_df.columns:
+                    top_categories = filtered_df.groupby('Expense Head')['Amount'].sum().sort_values(ascending=False).head(5)
+                    st.markdown("**🏆 Top Spending Categories:**")
+                    for i, (cat, amount) in enumerate(top_categories.items(), 1):
+                        percentage = (amount / filtered_df['Amount'].sum() * 100)
+                        st.markdown(f"{i}. **{cat}**: ₹{amount:,.0f} ({percentage:.1f}%)")
+            
+            with col_insight2:
+                # Monthly trends
+                if len(filtered_df) > 1:
+                    monthly_trend = filtered_df.groupby(filtered_df['Date'].dt.to_period('M'))['Amount'].sum()
+                    if len(monthly_trend) > 1:
+                        growth = ((monthly_trend.iloc[-1] - monthly_trend.iloc[0]) / monthly_trend.iloc[0]) * 100
+                        st.markdown(f"**📈 Monthly Trend:** {growth:+.1f}%")
+                    
+                    # Recent activity
+                    recent_month = filtered_df['Date'].max().strftime('%B %Y')
+                    month_data = filtered_df[filtered_df['Date'].dt.to_period('M') == filtered_df['Date'].max().to_period('M')]
+                    st.markdown(f"**📅 {recent_month}:** {len(month_data)} transactions, ₹{month_data['Amount'].sum():,.0f} total")
+        
+        # Data Quality Check
+        st.markdown("---")
+        st.markdown("### ✅ DATA QUALITY CHECK")
+        
+        col_qual1, col_qual2, col_qual3 = st.columns(3)
+        
+        with col_qual1:
+            missing_dates = filtered_df['Date'].isna().sum()
+            st.metric("Missing Dates", missing_dates, delta="Good" if missing_dates == 0 else "Needs Attention", 
+                     delta_color="normal" if missing_dates == 0 else "inverse")
+        
+        with col_qual2:
+            missing_amounts = filtered_df['Amount'].isna().sum()
+            st.metric("Missing Amounts", missing_amounts, delta="Good" if missing_amounts == 0 else "Needs Attention",
+                     delta_color="normal" if missing_amounts == 0 else "inverse")
+        
+        with col_qual3:
+            duplicate_records = filtered_df.duplicated().sum()
+            st.metric("Duplicate Records", duplicate_records, delta="Good" if duplicate_records == 0 else "Review Needed",
+                     delta_color="normal" if duplicate_records == 0 else "inverse")
 
+    else:
+        st.error("❌ Selected category not found in data")
 # ================= PDF GENERATION HANDLER =================
 def handle_pdf_generation(data, category):
     """Handle PDF report generation for the current category"""
