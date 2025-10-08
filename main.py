@@ -9,9 +9,13 @@ warnings.filterwarnings('ignore')
 from datetime import datetime, timedelta
 import io
 import base64
-# from backend.data_loader import load_excel_data, preprocess_data, calculate_comprehensive_metrics
-# from backend.forecast_model import forecast_expenses, calculate_seasonal_trends, advanced_ml_analysis
-# from backend.pdf_generator import generate_comprehensive_pdf, generate_company_pdf_report
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
+from reportlab.lib.units import inch
 
 # ================= PAGE CONFIG =================
 st.set_page_config(
@@ -20,6 +24,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
 # ================= BACKEND FUNCTIONS =================
 
 @st.cache_data
@@ -162,7 +167,7 @@ def calculate_comprehensive_metrics(monthly_df, df, category):
 def forecast_expenses(monthly_df, periods=6):
     """Generate expense forecasts using multiple models"""
     try:
-        if len(monthly_df) < 3:
+        if len(monthly_df) < 2:  # Reduced minimum data requirement
             return pd.DataFrame()
             
         # Prepare data for forecasting
@@ -173,29 +178,22 @@ def forecast_expenses(monthly_df, periods=6):
         lr_model = LinearRegression()
         lr_model.fit(X, y)
         
-        # Random Forest for better pattern recognition
-        rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
-        rf_model.fit(X, y)
-        
         # Generate future dates
         last_date = monthly_df['YearMonth'].max()
         future_dates = [last_date + pd.DateOffset(months=i+1) for i in range(periods)]
         
         # Generate forecasts
         future_X = np.array(range(len(monthly_df), len(monthly_df) + periods)).reshape(-1, 1)
-        
-        # Ensemble forecast (average of both models)
         lr_forecast = lr_model.predict(future_X)
-        rf_forecast = rf_model.predict(future_X)
-        ensemble_forecast = (lr_forecast + rf_forecast) / 2
         
         # Create forecast dataframe
         forecast_df = pd.DataFrame({
             'Date': future_dates,
-            'Forecast': ensemble_forecast,
-            'Linear_Forecast': lr_forecast,
-            'RF_Forecast': rf_forecast
+            'Forecast': lr_forecast
         })
+        
+        # Ensure no negative forecasts
+        forecast_df['Forecast'] = forecast_df['Forecast'].clip(lower=0)
         
         return forecast_df.round(2)
         
@@ -465,6 +463,7 @@ def generate_company_pdf_report(data):
     except Exception as e:
         st.error(f"Company PDF error: {str(e)}")
         return io.BytesIO()
+
 # ================= ATTRACTIVE GRADIENT CSS =================
 st.markdown("""
 <style>
@@ -1157,30 +1156,49 @@ def render_forecast_chart(monthly_df, forecast_df, category, metrics):
     
     st.subheader("🔮 INTELLIGENT EXPENSE FORECAST")
     
-    # Enhanced explanation
-    st.markdown(f"""
-    <div class='simple-explanation'>
-    <strong>💡 Strategic Forecasting:</strong> This AI-powered forecast predicts your next {len(forecast_df)} months of expenses 
-    based on {metrics['analysis_period']} months of historical data. Use these insights for proactive budget planning and resource allocation.
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Create enhanced forecast chart
-    fig = go.Figure()
-    
-    # Historical data with enhanced styling
-    fig.add_trace(go.Scatter(
-        x=monthly_df['YearMonth'],
-        y=monthly_df['Total_Amount'],
-        mode='lines+markers',
-        name='ACTUAL SPENDING',
-        line=dict(color='#3498db', width=5, shape='spline'),
-        marker=dict(size=10, color='#3498db', line=dict(width=2, color='white')),
-        hovertemplate='<b>%{x|%B %Y}</b><br>Actual: ₹%{y:,.0f}<extra></extra>'
-    ))
-    
-    # Forecast data with enhanced styling
-    if not forecast_df.empty:
+    # Check if forecast data is available
+    if forecast_df.empty:
+        st.markdown(f"""
+        <div class='simple-explanation'>
+        <strong>⚠️ Forecast Unavailable:</strong> Need at least 2 months of historical data for AI predictions. 
+        Currently have {len(monthly_df)} months of data.
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Show only historical data
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=monthly_df['YearMonth'],
+            y=monthly_df['Total_Amount'],
+            mode='lines+markers',
+            name='ACTUAL SPENDING',
+            line=dict(color='#3498db', width=5, shape='spline'),
+            marker=dict(size=10, color='#3498db', line=dict(width=2, color='white')),
+            hovertemplate='<b>%{x|%B %Y}</b><br>Actual: ₹%{y:,.0f}<extra></extra>'
+        ))
+    else:
+        # Show both historical and forecast data
+        st.markdown(f"""
+        <div class='simple-explanation'>
+        <strong>💡 Strategic Forecasting:</strong> This AI-powered forecast predicts your next {len(forecast_df)} months of expenses 
+        based on {metrics['analysis_period']} months of historical data. Use these insights for proactive budget planning and resource allocation.
+        </div>
+        """, unsafe_allow_html=True)
+        
+        fig = go.Figure()
+        
+        # Historical data
+        fig.add_trace(go.Scatter(
+            x=monthly_df['YearMonth'],
+            y=monthly_df['Total_Amount'],
+            mode='lines+markers',
+            name='ACTUAL SPENDING',
+            line=dict(color='#3498db', width=5, shape='spline'),
+            marker=dict(size=10, color='#3498db', line=dict(width=2, color='white')),
+            hovertemplate='<b>%{x|%B %Y}</b><br>Actual: ₹%{y:,.0f}<extra></extra>'
+        ))
+        
+        # Forecast data
         fig.add_trace(go.Scatter(
             x=forecast_df['Date'],
             y=forecast_df['Forecast'],
@@ -1191,6 +1209,7 @@ def render_forecast_chart(monthly_df, forecast_df, category, metrics):
             hovertemplate='<b>%{x|%B %Y}</b><br>Forecast: ₹%{y:,.0f}<extra></extra>'
         ))
     
+    # Common layout settings
     fig.update_layout(
         height=500,
         plot_bgcolor='white',
@@ -1212,7 +1231,7 @@ def render_forecast_chart(monthly_df, forecast_df, category, metrics):
     
     st.plotly_chart(fig, use_container_width=True)
     
-    # Enhanced forecast insights
+    # Show forecast insights only when forecast data is available
     if not forecast_df.empty:
         forecast_growth = ((forecast_df['Forecast'].iloc[-1] - forecast_df['Forecast'].iloc[0]) / forecast_df['Forecast'].iloc[0]) * 100
         peak_forecast_month = forecast_df.loc[forecast_df['Forecast'].idxmax(), 'Date']
@@ -2085,6 +2104,7 @@ def render_data_explorer(data, category):
 
     else:
         st.error("❌ Selected category not found in data")
+
 # ================= PDF GENERATION HANDLER =================
 def handle_pdf_generation(data, category):
     """Handle PDF report generation for the current category"""
@@ -2177,4 +2197,3 @@ def main():
 # Run the application
 if __name__ == "__main__":
     main()
-
