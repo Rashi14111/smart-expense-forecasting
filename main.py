@@ -486,6 +486,7 @@ def generate_comprehensive_pdf(df, category, metrics=None, monthly_df=None, fore
         st.error(f"PDF generation error: {str(e)}")
         return io.BytesIO()
 
+
 def generate_company_pdf_report(data):
     """Generate comprehensive company-wide PDF report"""
     try:
@@ -568,6 +569,166 @@ def generate_company_pdf_report(data):
                 ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#bdc3c7'))
             ]))
             elements.append(summary_table)
+        
+        elements.append(Spacer(1, 30))
+        
+        # Department Performance Comparison
+        elements.append(Paragraph("📊 DEPARTMENT PERFORMANCE ANALYSIS", heading_style))
+        
+        if category_metrics:
+            # Create department comparison table
+            dept_data = [["DEPARTMENT", "TOTAL SPEND", "MONTHLY AVG", "GROWTH RATE", "EFFICIENCY"]]
+            
+            for dept_name, metrics in category_metrics.items():
+                growth_color = "🟢" if metrics['growth_rate'] <= 5 else "🟡" if metrics['growth_rate'] <= 15 else "🔴"
+                efficiency_color = "🟢" if metrics['efficiency_score'] >= 7 else "🟡" if metrics['efficiency_score'] >= 5 else "🔴"
+                
+                dept_data.append([
+                    dept_name,
+                    f"₹{metrics['total_spent']:,.0f}",
+                    f"₹{metrics['avg_monthly']:,.0f}",
+                    f"{growth_color} {metrics['growth_rate']:+.1f}%",
+                    f"{efficiency_color} {metrics['efficiency_score']}/10"
+                ])
+            
+            dept_table = Table(dept_data, colWidths=[1.8*inch, 1.2*inch, 1.2*inch, 1.2*inch, 1.2*inch])
+            dept_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3498db')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#f8f9fa')),
+                ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#dee2e6'))
+            ]))
+            elements.append(dept_table)
+            
+            elements.append(Spacer(1, 20))
+            
+            # Department Insights
+            elements.append(Paragraph("🎯 KEY DEPARTMENT INSIGHTS", heading_style))
+            
+            # Find top performers
+            highest_spend_dept = max(category_metrics.items(), key=lambda x: x[1]['total_spent'])
+            most_efficient_dept = max(category_metrics.items(), key=lambda x: x[1]['efficiency_score'])
+            fastest_growing_dept = max(category_metrics.items(), key=lambda x: x[1]['growth_rate'])
+            
+            insights = [
+                f"• <b>Highest Spending Department:</b> {highest_spend_dept[0]} (₹{highest_spend_dept[1]['total_spent']:,.0f}) - {highest_spend_dept[1]['total_spent']/total_company_spend*100:.1f}% of total",
+                f"• <b>Most Efficient Department:</b> {most_efficient_dept[0]} ({most_efficient_dept[1]['efficiency_score']}/10 score) - Excellent cost control",
+                f"• <b>Fastest Growing Department:</b> {fastest_growing_dept[0]} ({fastest_growing_dept[1]['growth_rate']:+.1f}% growth) - Monitor for budget impact",
+                f"• <b>Overall Company Health:</b> {company_metrics['efficiency_comment']} with {company_metrics['growth_rate']:+.1f}% growth trend"
+            ]
+            
+            for insight in insights:
+                elements.append(Paragraph(insight, styles['Normal']))
+                elements.append(Spacer(1, 6))
+        
+        elements.append(Spacer(1, 30))
+        
+        # Detailed Department Analysis
+        elements.append(Paragraph("🔍 DETAILED DEPARTMENT BREAKDOWN", heading_style))
+        
+        for dept_name, metrics in category_metrics.items():
+            elements.append(Paragraph(f"📁 {dept_name.upper()} DEPARTMENT", styles['Heading3']))
+            
+            dept_detail_data = [
+                ["METRIC", "VALUE", "PERFORMANCE"],
+                ["Total Expenditure", f"₹{metrics['total_spent']:,.0f}", f"{metrics['total_spent']/total_company_spend*100:.1f}% of company total"],
+                ["Monthly Average", f"₹{metrics['avg_monthly']:,.0f}", "Department baseline"],
+                ["Growth Trend", f"{metrics['growth_rate']:+.1f}%", metrics['trend_description']],
+                ["Efficiency Score", f"{metrics['efficiency_score']}/10", metrics['efficiency_comment']],
+                ["Peak Month", f"{metrics['highest_month_name']}", f"₹{metrics['highest_month_amount']:,.0f}"],
+                ["Transactions", f"{metrics['transaction_count']}", "Volume processed"]
+            ]
+            
+            dept_table = Table(dept_detail_data, colWidths=[1.8*inch, 1.5*inch, 2*inch])
+            dept_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#95a5a6')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#f8f9fa')),
+                ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#bdc3c7'))
+            ]))
+            elements.append(dept_table)
+            elements.append(Spacer(1, 15))
+        
+        elements.append(Spacer(1, 30))
+        
+        # Strategic Recommendations
+        elements.append(Paragraph("🚀 STRATEGIC BUSINESS RECOMMENDATIONS", heading_style))
+        
+        recommendations = [
+            "BUSINESS-WIDE STRATEGIES",
+            "1. ENTERPRISE COST OPTIMIZATION",
+            "• Implement cross-departmental cost-sharing initiatives",
+            "• Centralize procurement for better negotiation power", 
+            "• Establish company-wide expense policies and controls",
+            "",
+            "2. DEPARTMENTAL PERFORMANCE MANAGEMENT",
+            "• Set department-specific efficiency targets",
+            "• Implement monthly performance dashboards",
+            "• Create incentive programs for cost savings",
+            "",
+            "3. FINANCIAL FORECASTING & PLANNING",
+            "• Develop rolling 12-month expense forecasts",
+            "• Implement scenario planning for different growth rates",
+            "• Establish contingency budgets for unexpected expenses",
+            "",
+            "4. TECHNOLOGY & AUTOMATION",
+            "• Implement automated expense tracking systems",
+            "• Use AI-powered analytics for pattern detection",
+            "• Create real-time budget monitoring dashboards",
+            "",
+            "5. CONTINUOUS IMPROVEMENT",
+            "• Conduct quarterly expense reviews",
+            "• Benchmark against industry standards",
+            "• Implement best practice sharing across departments"
+        ]
+        
+        for rec in recommendations:
+            if rec.startswith("•"):
+                elements.append(Paragraph(rec, styles['Normal']))
+            elif rec and not rec.isupper():
+                elements.append(Paragraph(rec, styles['Normal']))
+            elif rec:
+                elements.append(Paragraph(rec, styles['Heading3']))
+            else:
+                elements.append(Spacer(1, 6))
+        
+        elements.append(Spacer(1, 20))
+        
+        # Risk Assessment
+        elements.append(Paragraph("🛡️ COMPANY RISK ASSESSMENT", heading_style))
+        
+        risk_factors = [
+            f"• <b>Spending Volatility:</b> {company_metrics['variance']*100:.1f}% monthly variation - {'Low Risk' if company_metrics['variance'] < 0.3 else 'Medium Risk' if company_metrics['variance'] < 0.6 else 'High Risk'}",
+            f"• <b>Growth Sustainability:</b> {company_metrics['growth_rate']:+.1f}% trend - {'Sustainable' if abs(company_metrics['growth_rate']) < 10 else 'Monitor Closely'}",
+            f"• <b>Efficiency Management:</b> {company_metrics['efficiency_score']}/10 score - {'Well Managed' if company_metrics['efficiency_score'] >= 7 else 'Needs Improvement'}",
+            "• <b>Recommendation:</b> Implement monthly financial health checks and early warning systems"
+        ]
+        
+        for risk in risk_factors:
+            elements.append(Paragraph(risk, styles['Normal']))
+            elements.append(Spacer(1, 6))
+        
+        elements.append(Spacer(1, 20))
+        
+        # Conclusion
+        elements.append(Paragraph("📈 BUSINESS OUTLOOK", heading_style))
+        conclusion_text = f"""
+        Based on the comprehensive analysis of {len(category_metrics)} departments and {total_transactions:,} transactions, 
+        the company demonstrates {company_metrics['efficiency_comment'].lower()}. 
+        
+        The overall growth trend of {company_metrics['growth_rate']:+.1f}% indicates {'healthy expansion' if company_metrics['growth_rate'] > 0 else 'cost optimization efforts'}. 
+        With strategic implementation of the recommended actions, the company can achieve improved financial performance 
+        and sustainable growth in the coming quarters.
+        
+        Next Review Date: {(datetime.now() + pd.DateOffset(months=1)).strftime('%B %d, %Y')}
+        """
+        
+        elements.append(Paragraph(conclusion_text, styles['Normal']))
         
         # Build PDF
         doc.build(elements)
@@ -2312,5 +2473,6 @@ def main():
 # Run the application
 if __name__ == "__main__":
     main()
+
 
 
